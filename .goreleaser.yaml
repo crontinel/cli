@@ -1,0 +1,30 @@
+projectName: crontinel
+env:
+  - GoVersion=1.21
+builds:
+  - id: crontinel
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    main: .
+    binary: crontinel
+    ldflags:
+      - -s -w
+archives:
+  - id: default
+    format: tar.gz
+    files:
+      - README.md
+checksum:
+  name_template: 'checksums.txt'
+release:
+  github:
+    owner: crontinel
+    name: cli
+  draft: true

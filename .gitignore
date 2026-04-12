@@ -1,0 +1,8 @@
+crontinel
+crontinel.exe
+crontinel_arm64
+crontinel_amd64
+*.exe
+*.tar.gz
+dist/
+.env
