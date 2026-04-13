@@ -4,9 +4,9 @@ Monitor your Laravel cron jobs and queue workers from the terminal.
 
 ```bash
 # Install (macOS/Linux)
-curl -sSL https://get.crontinel.com/install | sh
+curl -sSL https://raw.githubusercontent.com/crontinel/cli/main/install.sh | sh
 
-# Or download from releases
+# Or download binary directly
 curl -L https://github.com/crontinel/cli/releases/latest/download/crontinel -o crontinel
 chmod +x crontinel
 mv crontinel /usr/local/bin/
