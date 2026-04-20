@@ -16,10 +16,11 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: '1.26'
           cache-dependency-path: go.sum
 
       - name: Run Go Dependabot
         uses: ahmadnassri/go-dependabot-action@v2
         with:
           package: .
+
