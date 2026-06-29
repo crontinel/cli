@@ -40,8 +40,50 @@ func run(args []string) error {
 	apiURLPtr := fs.String("url", "https://app.crontinel.com", "Crontinel API URL")
 	jsonPtr := fs.Bool("json", false, "Output JSON")
 
-	fs.Parse(args[2:])
+	cmd := args[1]
+	flagStart := 2
 
+	// Check if args[1] is a flag (--xxx) vs a command
+	if len(cmd) > 0 && cmd[0] == '-' {
+		// Flags before command: parse from args[1:], command is first non-flag arg
+		fs2 := flag.NewFlagSet("crontinel", flag.ContinueOnError)
+		fs2.Usage = func() { printUsage() }
+		apiKeyPtr2 := fs2.String("key", "", "Crontinel API key (or CRONTINEL_API_KEY env)")
+		apiURLPtr2 := fs2.String("url", "https://app.crontinel.com", "Crontinel API URL")
+		jsonPtr2 := fs2.Bool("json", false, "Output JSON")
+		if err := fs2.Parse(args[1:]); err != nil {
+			return err
+		}
+		if fs2.NArg() == 0 {
+			printUsage()
+			return nil
+		}
+		cmd = fs2.Arg(0)
+		apiKeyPtr = apiKeyPtr2
+		apiURLPtr = apiURLPtr2
+		jsonPtr = jsonPtr2
+	} else {
+		// Command before flags: parse from args[2:]
+		if err := fs.Parse(args[flagStart:]); err != nil {
+			return err
+		}
+	}
+
+	// Help for --help flag
+	if cmd == "help" || cmd == "--help" || cmd == "-h" {
+		printUsage()
+		return nil
+	}
+
+	// Validate command before requiring API key
+	validCmds := map[string]bool{"ping": true, "health": true, "monitors": true, "list": true, "events": true, "alerts": true}
+	if !validCmds[cmd] {
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", cmd)
+		printUsage()
+		return flag.ErrHelp
+	}
+
+	// Resolve API key
 	if *apiKeyPtr != "" {
 		apiKey = *apiKeyPtr
 	} else if key := os.Getenv("CRONTINEL_API_KEY"); key != "" {
@@ -51,7 +93,6 @@ func run(args []string) error {
 	}
 	apiURL = *apiURLPtr
 
-	cmd := args[1]
 	var err error
 
 	switch cmd {
@@ -115,12 +156,15 @@ type RPCError struct {
 	Message string `json:"message"`
 }
 
-func doRPC(ctx context.Context, method string, params map[string]interface{}) (*RPCResponse, error) {
+func doCall(ctx context.Context, tool string, args map[string]interface{}) (*RPCResponse, error) {
 	body, _ := json.Marshal(RPCRequest{
 		JSONRPC: "2.0",
-		Method:  method,
-		Params:  params,
-		ID:      1,
+		Method:  "tools/call",
+		Params: map[string]interface{}{
+			"name":      tool,
+			"arguments": args,
+		},
+		ID: 1,
 	})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/api/mcp", strings.NewReader(string(body)))
@@ -152,22 +196,46 @@ func cmdPing(jsonOutput bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	resp, err := doRPC(ctx, "list/jobs", map[string]interface{}{"take": 1})
+	body, _ := json.Marshal(RPCRequest{
+		JSONRPC: "2.0",
+		Method:  "tools/list",
+		ID:      1,
+	})
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/api/mcp", strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("ping failed: %w", err)
 	}
+	defer resp.Body.Close()
+
+	respBytes, _ := io.ReadAll(resp.Body)
+	var rpcResp RPCResponse
+	if err := json.Unmarshal(respBytes, &rpcResp); err != nil {
+		return fmt.Errorf("ping failed: %w", err)
+	}
+	if rpcResp.Error != nil {
+		return fmt.Errorf("ping failed: RPC error %d: %s", rpcResp.Error.Code, rpcResp.Error.Message)
+	}
 
 	if jsonOutput {
-		fmt.Println(string(resp.Result))
+		fmt.Println(string(rpcResp.Result))
 		return nil
 	}
 
-	var result map[string]interface{}
-	json.Unmarshal(resp.Result, &result)
-	fmt.Println("✓ Connected to Crontinel")
-	if mon, ok := result["monitors"].([]any); ok && len(mon) > 0 {
-		fmt.Printf("  Monitors: %d\n", len(mon))
+	var result struct {
+		Tools []map[string]interface{} `json:"tools"`
 	}
+	json.Unmarshal(rpcResp.Result, &result)
+	fmt.Println("✓ Connected to Crontinel")
+	fmt.Printf("  Available tools: %d\n", len(result.Tools))
 	return nil
 }
 
@@ -175,7 +243,7 @@ func cmdMonitors(jsonOutput bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	resp, err := doRPC(ctx, "list/jobs", map[string]interface{}{"take": 50})
+	resp, err := doCall(ctx, "list_scheduled_jobs", map[string]interface{}{})
 	if err != nil {
 		return fmt.Errorf("failed to list monitors: %w", err)
 	}
@@ -185,32 +253,55 @@ func cmdMonitors(jsonOutput bool) error {
 		return nil
 	}
 
-	var result map[string]interface{}
-	json.Unmarshal(resp.Result, &result)
-	monitors, _ := result["monitors"].([]any)
+	text, err := extractMCPText(resp)
+	if err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
 
-	if len(monitors) == 0 {
-		fmt.Println("No monitors found. Add one at app.crontinel.com")
+	var runs []map[string]interface{}
+	if err := json.Unmarshal([]byte(text), &runs); err != nil {
+		return fmt.Errorf("failed to parse job list: %w", err)
+	}
+
+	if len(runs) == 0 {
+		fmt.Println("No scheduled jobs found. Use the app to create one.")
 		return nil
 	}
 
-	fmt.Printf("Monitors (%d):\n", len(monitors))
-	for _, m := range monitors {
-		mon := m.(map[string]interface{})
-		status := "●"
-		if mon["is_paused"] == true {
-			status = "⏸"
+	fmt.Printf("Scheduled jobs (%d):\n", len(runs))
+	for _, job := range runs {
+		cmd := job["command"]
+		status := job["last_status"]
+		icon := "●"
+		if status == "failed" || status == "error" {
+			icon = "✗"
 		}
-		fmt.Printf("  %s %s (%s)\n", status, mon["name"], mon["schedule"])
+		fmt.Printf("  %s %s (last: %s)\n", icon, cmd, status)
 	}
 	return nil
+}
+
+func extractMCPText(resp *RPCResponse) (string, error) {
+	var wrapper struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(resp.Result, &wrapper); err != nil {
+		return "", fmt.Errorf("failed to parse MCP response: %w", err)
+	}
+	if len(wrapper.Content) == 0 {
+		return "", fmt.Errorf("empty MCP response")
+	}
+	return wrapper.Content[0].Text, nil
 }
 
 func cmdEvents(jsonOutput bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	resp, err := doRPC(ctx, "list/events", map[string]interface{}{"take": 20})
+	resp, err := doCall(ctx, "list_recent_alerts", map[string]interface{}{"hours": 72})
 	if err != nil {
 		return fmt.Errorf("failed to list events: %w", err)
 	}
@@ -220,28 +311,33 @@ func cmdEvents(jsonOutput bool) error {
 		return nil
 	}
 
-	var result map[string]interface{}
-	json.Unmarshal(resp.Result, &result)
-	events, _ := result["events"].([]any)
+	text, err := extractMCPText(resp)
+	if err != nil {
+		return fmt.Errorf("failed to parse events: %w", err)
+	}
 
-	if len(events) == 0 {
-		fmt.Println("No recent events.")
+	var alerts []map[string]interface{}
+	if err := json.Unmarshal([]byte(text), &alerts); err != nil {
+		return fmt.Errorf("failed to parse alert list: %w", err)
+	}
+
+	if len(alerts) == 0 {
+		fmt.Println("No recent alerts.")
 		return nil
 	}
 
-	fmt.Printf("Recent events (%d):\n", len(events))
-	for _, e := range events {
-		ev := e.(map[string]interface{})
-		state := ev["state"]
+	fmt.Printf("Recent alerts (%d):\n", len(alerts))
+	for _, alert := range alerts {
+		state := alert["state"]
 		icon := "○"
-		if state == "firing" {
+		if state == "firing" || state == "active" {
 			icon = "✗"
 		} else if state == "resolved" {
 			icon = "✓"
 		}
-		ts := ev["created_at"]
-		msg := ev["message"]
-		fmt.Printf("  %s %s [%s]\n", icon, msg, ts)
+		key := alert["alert_key"]
+		ts := alert["fired_at"]
+		fmt.Printf("  %s %s [%s]\n", icon, key, ts)
 	}
 	return nil
 }
@@ -250,7 +346,7 @@ func cmdAlerts(jsonOutput bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	resp, err := doRPC(ctx, "list/alerts", map[string]interface{}{})
+	resp, err := doCall(ctx, "list_recent_alerts", map[string]interface{}{"hours": 168})
 	if err != nil {
 		return fmt.Errorf("failed to list alerts: %w", err)
 	}
@@ -260,20 +356,34 @@ func cmdAlerts(jsonOutput bool) error {
 		return nil
 	}
 
-	var result map[string]interface{}
-	json.Unmarshal(resp.Result, &result)
-	alerts, _ := result["channels"].([]any)
+	text, err := extractMCPText(resp)
+	if err != nil {
+		return fmt.Errorf("failed to parse alerts: %w", err)
+	}
+
+	var alerts []map[string]interface{}
+	if err := json.Unmarshal([]byte(text), &alerts); err != nil {
+		return fmt.Errorf("failed to parse alert list: %w", err)
+	}
 
 	if len(alerts) == 0 {
-		fmt.Println("No alert channels configured. Add one at app.crontinel.com")
+		fmt.Println("No alerts in the last 7 days.")
 		return nil
 	}
 
-	fmt.Printf("Alert channels (%d):\n", len(alerts))
-	for _, a := range alerts {
-		al := a.(map[string]interface{})
-		typ := al["type"]
-		fmt.Printf("  • %s\n", typ)
+	fmt.Printf("Recent alerts (%d):\n", len(alerts))
+	for _, al := range alerts {
+		state := al["state"]
+		icon := "○"
+		if state == "firing" || state == "active" {
+			icon = "⚠"
+		} else if state == "resolved" {
+			icon = "✓"
+		}
+		key := al["alert_key"]
+		count := al["fire_count"]
+		ts := al["fired_at"]
+		fmt.Printf("  %s %s (×%v) [%s]\n", icon, key, count, ts)
 	}
 	return nil
 }

@@ -66,15 +66,16 @@ func TestCmdMonitorsReportsPausesAndSchedules(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if req.Method != "list/jobs" {
+		if req.Method != "tools/call" {
 			t.Fatalf("unexpected RPC method: %s", req.Method)
 		}
-		if got := req.Params["take"]; got != float64(50) {
-			t.Fatalf("unexpected take param: %#v", got)
+		params := req.Params
+		if params["name"] != "list_scheduled_jobs" {
+			t.Fatalf("unexpected tool name: %v", params["name"])
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"monitors":[{"name":"Nightly sync","schedule":"0 2 * * *"},{"name":"Paused job","schedule":"*/5 * * * *","is_paused":true}]}}`))
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"[{\"command\":\"Nightly sync\",\"last_status\":\"success\",\"last_run_at\":\"2026-06-28T02:00:00Z\",\"run_count_today\":1},{\"command\":\"Paused job\",\"last_status\":\"paused\",\"last_run_at\":\"2026-06-27T00:00:00Z\",\"run_count_today\":0}]"}]}}`))
 	}))
 	defer server.Close()
 
@@ -86,14 +87,14 @@ func TestCmdMonitorsReportsPausesAndSchedules(t *testing.T) {
 		}
 	})
 
-	if !strings.Contains(output, "Monitors (2):") {
-		t.Fatalf("expected monitor count in output, got: %s", output)
+	if !strings.Contains(output, "Scheduled jobs (2):") {
+		t.Fatalf("expected job count in output, got: %s", output)
 	}
-	if !strings.Contains(output, "● Nightly sync (0 2 * * *)") {
-		t.Fatalf("expected active monitor in output, got: %s", output)
+	if !strings.Contains(output, "● Nightly sync (last: success)") {
+		t.Fatalf("expected success job in output, got: %s", output)
 	}
-	if !strings.Contains(output, "⏸ Paused job (*/5 * * * *)") {
-		t.Fatalf("expected paused monitor in output, got: %s", output)
+	if !strings.Contains(output, "● Paused job (last: paused)") {
+		t.Fatalf("expected paused job in output, got: %s", output)
 	}
 }
 
@@ -103,15 +104,19 @@ func TestCmdEventsReportsStateIcons(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if req.Method != "list/events" {
+		if req.Method != "tools/call" {
 			t.Fatalf("unexpected RPC method: %s", req.Method)
 		}
-		if got := req.Params["take"]; got != float64(20) {
-			t.Fatalf("unexpected take param: %#v", got)
+		params := req.Params
+		if params["name"] != "list_recent_alerts" {
+			t.Fatalf("unexpected tool name: %v", params["name"])
+		}
+		if params["arguments"].(map[string]interface{})["hours"] != float64(72) {
+			t.Fatalf("unexpected hours param: %#v", params["arguments"])
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"events":[{"state":"firing","message":"Queue worker stalled","created_at":"2026-06-06T00:00:00Z"},{"state":"resolved","message":"Cron recovered","created_at":"2026-06-06T01:00:00Z"}]}}`))
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"[{\"alert_key\":\"Queue worker stalled\",\"state\":\"firing\",\"fire_count\":3,\"fired_at\":\"2026-06-06T00:00:00Z\"},{\"alert_key\":\"Cron recovered\",\"state\":\"resolved\",\"fire_count\":1,\"fired_at\":\"2026-06-06T01:00:00Z\"}]"}]}}`))
 	}))
 	defer server.Close()
 
@@ -123,13 +128,13 @@ func TestCmdEventsReportsStateIcons(t *testing.T) {
 		}
 	})
 
-	if !strings.Contains(output, "Recent events (2):") {
-		t.Fatalf("expected event count in output, got: %s", output)
+	if !strings.Contains(output, "Recent alerts (2):") {
+		t.Fatalf("expected alert count in output, got: %s", output)
 	}
-	if !strings.Contains(output, "✗ Queue worker stalled [2026-06-06T00:00:00Z]") {
+	if !strings.Contains(output, "✗ Queue worker stalled") {
 		t.Fatalf("expected firing event in output, got: %s", output)
 	}
-	if !strings.Contains(output, "✓ Cron recovered [2026-06-06T01:00:00Z]") {
+	if !strings.Contains(output, "✓ Cron recovered") {
 		t.Fatalf("expected resolved event in output, got: %s", output)
 	}
 }
@@ -140,12 +145,16 @@ func TestCmdAlertsListsChannels(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if req.Method != "list/alerts" {
+		if req.Method != "tools/call" {
 			t.Fatalf("unexpected RPC method: %s", req.Method)
+		}
+		params := req.Params
+		if params["name"] != "list_recent_alerts" {
+			t.Fatalf("unexpected tool name: %v", params["name"])
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"channels":[{"type":"email"},{"type":"slack"}]}}`))
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"[{\"alert_key\":\"Queue stalled\",\"state\":\"firing\",\"fire_count\":5,\"fired_at\":\"2026-06-06T00:00:00Z\"},{\"alert_key\":\"Disk space\",\"state\":\"resolved\",\"fire_count\":2,\"fired_at\":\"2026-06-05T12:00:00Z\"}]"}]}}`))
 	}))
 	defer server.Close()
 
@@ -157,13 +166,13 @@ func TestCmdAlertsListsChannels(t *testing.T) {
 		}
 	})
 
-	if !strings.Contains(output, "Alert channels (2):") {
+	if !strings.Contains(output, "Recent alerts (2):") {
 		t.Fatalf("expected alert count in output, got: %s", output)
 	}
-	if !strings.Contains(output, "• email") {
-		t.Fatalf("expected email alert channel in output, got: %s", output)
+	if !strings.Contains(output, "⚠ Queue stalled") {
+		t.Fatalf("expected firing alert in output, got: %s", output)
 	}
-	if !strings.Contains(output, "• slack") {
-		t.Fatalf("expected slack alert channel in output, got: %s", output)
+	if !strings.Contains(output, "✓ Disk space") {
+		t.Fatalf("expected resolved alert in output, got: %s", output)
 	}
 }
