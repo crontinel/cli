@@ -43,6 +43,12 @@ func run(args []string) error {
 	cmd := args[1]
 	flagStart := 2
 
+	// Handle --help / -h immediately, regardless of position
+	if cmd == "help" || cmd == "--help" || cmd == "-h" {
+		printUsage()
+		return nil
+	}
+
 	// Check if args[1] is a flag (--xxx) vs a command
 	if len(cmd) > 0 && cmd[0] == '-' {
 		// Flags before command: parse from args[1:], command is first non-flag arg
@@ -67,12 +73,6 @@ func run(args []string) error {
 		if err := fs.Parse(args[flagStart:]); err != nil {
 			return err
 		}
-	}
-
-	// Help for --help flag
-	if cmd == "help" || cmd == "--help" || cmd == "-h" {
-		printUsage()
-		return nil
 	}
 
 	// Validate command before requiring API key
