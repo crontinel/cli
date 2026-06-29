@@ -2,6 +2,10 @@
 
 Monitor your Laravel cron jobs and queue workers from the terminal.
 
+This CLI is a thin wrapper over the Crontinel API: it doesn't run local
+watchers, it lists the monitors, events, and alert channels already configured
+for your package agents in the SaaS.
+
 ```bash
 # Install (macOS/Linux)
 curl -sSL https://raw.githubusercontent.com/crontinel/cli/main/install.sh | sh

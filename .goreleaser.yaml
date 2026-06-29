@@ -1,6 +1,6 @@
 projectName: crontinel
 env:
-  - GoVersion=1.21
+  - GoVersion=1.26
 builds:
   - id: crontinel
     env:
@@ -23,8 +23,19 @@ archives:
       - README.md
 checksum:
   name_template: 'checksums.txt'
+brews:
+  - name: crontinel
+    repository:
+      owner: crontinel
+      name: homebrew-tap
+    directory: Formula
+    homepage: https://crontinel.com
+    description: CLI tool for Crontinel background job monitoring
+    test: |
+      system "#{bin}/crontinel", "--help"
+    install: |
+      bin.install "crontinel"
 release:
   github:
     owner: crontinel
     name: cli
-  draft: true
