@@ -6,3 +6,4 @@ crontinel_amd64
 *.tar.gz
 dist/
 .env
+cli
