@@ -18,7 +18,8 @@ case "$ARCH" in
 esac
 
 if [ "$VERSION" = "latest" ]; then
-  VERSION=$(curl -s https://api.github.com/repos/crontinel/cli/releases/latest | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'].lstrip('v'))" 2>/dev/null || curl -sL "https://github.com/crontinel/cli/releases/latest" -o /dev/null -w "%{redirect_url}" | grep -o 'v[0-9.]*' | tr -d 'v')
+  VERSION=$(curl -sf "https://api.github.com/repos/crontinel/cli/releases/latest" 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": "v\([^"]*\)".*/\1/')
+  : "${VERSION:=0.1.0}"
 fi
 
 DEST="${DEST:-$HOME/.local/bin/crontinel}"
