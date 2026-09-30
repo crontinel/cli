@@ -1,9 +1,8 @@
 name: Dependabot (Go)
 
+# Keep the legacy dependency diagnostic available on demand.
+# Scheduled maintenance should produce actionable updates before being restored.
 on:
-  schedule:
-    # Weekly on Monday at 06:00 UTC
-    - cron: '0 6 * * 1'
   workflow_dispatch:
 
 jobs:
